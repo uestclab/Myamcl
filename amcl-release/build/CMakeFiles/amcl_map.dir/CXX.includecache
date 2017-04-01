@@ -1,0 +1,24 @@
+#IncludeRegexLine: ^[ 	]*#[ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+../include/amcl/map/map.h
+stdint.h
+-
+
+/home/liqing/amcl_study/amcl_ws/src/navigation-indigo-devel/amcl/src/amcl/map/map_cspace.cpp
+queue
+-
+math.h
+-
+stdlib.h
+-
+string.h
+-
+map.h
+/home/liqing/amcl_study/amcl_ws/src/navigation-indigo-devel/amcl/src/amcl/map/map.h
+

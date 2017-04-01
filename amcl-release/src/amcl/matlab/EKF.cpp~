@@ -1,0 +1,259 @@
+#include "EKF.h"
+#include "CSMmap.h"
+#include <algorithm>
+#include <vector>
+#include <math.h>
+// #include <cmath>
+// #include <opencv2/core/core.hpp>
+// #include <opencv2/highgui/highgui.hpp>
+#include <iostream>
+
+using namespace Eigen;
+// using namespace cv;
+using namespace std;
+
+namespace amcl
+{
+
+EKF::EKF(Eigen::Vector3d &initPose, Eigen::Matrix3d &initCov, Eigen::MatrixXd &Gaussian_map, double res, float origin_x, float origin_y)
+{
+    initPose_ = initPose;
+    latestPose_ = initPose;
+    //std::cout << "initPose_ = " << initPose_ << "latestPose_ = " << latestPose_ << std::endl;
+    initconv_ = initCov;
+    latestconv_ = initCov;
+    GaussianMap_ = Gaussian_map;
+    resolution_ = res;
+    originalx_ = origin_x;
+    originaly_ = origin_y;
+
+    rows_ = Gaussian_map.cols();
+    cols_ = Gaussian_map.rows();
+    //std::cout << "rows_ = " << rows_ << "cols_ = " << cols_ << std::endl;
+    /*
+    std::vector<std::vector<std::vector<double>>> ScoreMap(3,vector<vector<double> >(4,vector<double>(5,0)));
+	
+	 for(int z=0;z<3;z++)  
+    {  
+        for (int y=0;y<4;y++)  
+        {  
+            for (int x=0;x<5;x++)  
+            {  
+                ScoreMap[z][y][x]= ScoreMap[z][y][x] + x + y + z;  
+                std::cout<<ScoreMap[z][y][z]<<std::endl;  
+            }  
+        }  
+    } 
+*/
+}
+
+EKF::~EKF()
+{
+}
+
+void EKF::run(Eigen::Vector3d &Pre_odom, Eigen::Vector3d &Cur_odom, double *laserRange, double *theta, int range_count, double maxRange)
+{
+    //std::cout << "Enter EKF::run" << std::endl;
+    //std::cout << "Cur_odom = " << Cur_odom << std::endl;
+    //std::cout << "Pre_odom = " << Pre_odom << std::endl;
+    double delta_x = Cur_odom(0) - Pre_odom(0);
+    double delta_y = Cur_odom(1) - Pre_odom(1);
+    double rot1 = atan2(delta_y, delta_x) - Pre_odom(2);
+    double trans = sqrt(delta_x * delta_x + delta_y * delta_y);
+    double rot2 = Cur_odom(2) - Pre_odom(2) - rot1;
+    double th = latestPose_(2);
+    Vector3d predict;
+    predict(0) = latestPose_(0) + trans * cos(th + rot1);
+    predict(1) = latestPose_(1) + trans * sin(th + rot1);
+    predict(2) = latestPose_(2) + rot1 + rot2;
+    //std::cout << "Vector3d delta odom = " << predict - latestPose_ << std::endl;
+    Matrix3d R = Matrix3d::Zero();
+
+    double r = 0.1 * trans * cos(th + rot1);
+    R(0, 0) = r * r > 0.0001 ? r * r : 0.0001;
+    r = 0.1 * trans * sin(th + rot1);
+    R(1, 1) = r * r > 0.0001 ? r * r : 0.0001;
+    r = 0.1 * (rot1 + rot2);
+    R(2, 2) = r * r > (0.1 / 180 * M_PI) * (0.1 / 180 * M_PI) ? r * r : (0.1 / 180 * M_PI) * (0.1 / 180 * M_PI);
+
+    // R(0,0) = (0.1*trans*cos(th+rot1)) * (0.1*trans*cos(th+rot1)) > 0.0001 ? ((0.1*trans*cos(th+rot1)) * (0.1*trans*cos(th+rot1))):0.0001;
+    // R(1,1) = (0.1*trans*sin(th+rot1)) * (0.1*trans*sin(th+rot1)) > 0.0001 ? ((0.1*trans*sin(th+rot1)) * (0.1*trans*sin(th+rot1))):0.0001;
+    // R(2,2) = (0.1*(rot1+rot2)) * (0.1*(rot1+rot2)) > (0.1/180*M_PI) * (0.1/180*M_PI) ? ((0.1*(rot1+rot2)) * (0.1*(rot1+rot2))):((0.1/180*M_PI) * (0.1/180*M_PI));
+
+    //std::cout << "R = " << std::endl << R << std::endl;
+
+    Matrix3d G = Matrix3d::Identity();
+    G(0, 2) = -sin(th + rot1) * trans;
+    G(1, 2) = cos(th + rot1) * trans;
+    latestconv_ = G * latestconv_ * G.transpose() + R;
+
+    Matrix3d cov, K;
+    Vector3d observe = predict;
+    SearchBestAlign(&observe, laserRange, theta, range_count, 0.3, 0.3, 0.1, 10 * M_PI / 180, 2 * M_PI / 180, true, &cov, maxRange);
+
+    K = latestconv_ * ((latestconv_ + cov).inverse());
+    //std::cout << "K = " << K << std::endl;
+
+    //std::cout << "cov = " << std::endl << cov << std::endl;
+    SearchBestAlign(&observe, laserRange, theta, range_count, 0.1, 0.1, 0.05, 2 * M_PI / 180, 0.5 * M_PI / 180, false, &cov, maxRange);
+
+    latestPose_ = predict + K * (observe - predict);
+    //latestPose_ = observe;
+    latestconv_ = (Matrix3d::Identity() - K) * latestconv_;
+}
+
+void EKF::SearchBestAlign(Eigen::Vector3d *Pose1, double *laserRange, double *theta, int range_count, float xRange, float yRange, float del_Range, float ThRange, float del_Th, bool cal_cov, Eigen::Matrix3d *cov, double maxRange)
+{
+    Eigen::Vector3d Pose = *Pose1;
+    //std::cout << "Enter SearchBestAlign()" << std::endl;
+    int size_theta = (2 * ThRange / del_Th) + 1;
+    int size_x = (2 * xRange / del_Range) + 1;
+    int size_y = (2 * yRange / del_Range) + 1;
+    //std::cout << "size_theta = " << size_theta << "size_x = " << size_x << " size_y = " << size_y  << std::endl;
+    //VectorXd thetas,x_search,y_search;
+    std::vector<double> thetas, x_search, y_search;
+    for (int i = 0; i < size_theta; i++)
+    {
+	thetas.push_back(-ThRange + del_Th * i);
+    }
+    //std::cout << "after thetas()" << std::endl;
+    for (int i = 0; i < size_x; i++)
+    {
+	x_search.push_back(-xRange + del_Range * i);
+    }
+    //std::cout << "after x_search()" << std::endl;
+    for (int i = 0; i < size_y; i++)
+    {
+	y_search.push_back(-yRange + del_Range * i);
+    }
+
+    //std::cout << "double best_score = -10000;" << std::endl;
+    double best_score = -10000;
+    double sum_score = 0;
+    Vector3d best_align = Vector3d(0, 0, 0);
+
+    std::vector<std::vector<std::vector<double>>> ScoreMap(size_theta, vector<vector<double>>(size_x, vector<double>(size_y, 0)));
+
+    for (int z = 0; z < size_theta; z++)
+    {
+	double LaserAngle = Pose(2) + thetas[z];
+	//std::cout << "LaserAngle = " << LaserAngle << std::endl;
+	std::vector<Vector2d> EPinLaser;
+	Vector2d ep;
+	for (int i = 0; i < range_count; i++)
+	{
+	    if (laserRange[i] > maxRange)
+			continue;
+
+	    ep(0) = laserRange[i] * cos(theta[i] + LaserAngle);
+	    ep(1) = laserRange[i] * sin(theta[i] + LaserAngle);
+	    EPinLaser.push_back(ep);
+	}
+	//std::cout << "EPinLaser .size() = " << EPinLaser.size() << std::endl;
+
+	for (int x = 0; x < size_x; x++)
+	{
+	    for (int y = 0; y < size_y; y++)
+	    {
+		double score = 0;
+		Vector2d laserPose;
+		laserPose(0) = Pose(0) + x_search[x] + 0.19 * cos(LaserAngle) - originalx_;
+		laserPose(1) = Pose(1) + y_search[y] + 0.19 * sin(LaserAngle) - originaly_;
+		//std::cout << "laserPose = " << laserPose << std::endl;
+		//std::cout << "before for(int i = 0 ; i < range_count ; i ++)" << std::endl;
+		float scale = 1/resolution_;
+		for (int i = 0; i < EPinLaser.size(); i++)
+		{
+		    // EPinWorld.push_back(epW);
+			int index_x = (laserPose(0) + EPinLaser[i](0)) * scale;
+		    int index_y = (laserPose(1) + EPinLaser[i](1)) * scale;
+			std::cout << "index_x = " << index_x << "   index_y = " << index_y << "rows_ = " << rows_ <<  "cols_ = " << cols_<< std::endl;
+				
+		    if (index_y < rows_ && index_x > -1 && index_x < cols_ && index_y > -1)
+		    {
+			score = score + GaussianMap_(index_x, index_y);
+		    }
+		}
+
+		if (score > best_score)
+		{
+		    //std::cout << "if(score > best_score) " << std::endl;
+		    best_score = score;
+		    best_align(0) = Pose(0) + x_search[x];
+		    best_align(1) = Pose(1) + y_search[y];
+		    best_align(2) = LaserAngle;
+		    std::cout << "best_score = " << best_score << std::endl;
+		}
+		ScoreMap[z][x][y] = score;
+		sum_score = sum_score + ScoreMap[z][x][y];
+	    }
+	}
+    }
+    std::cout << "best_align = " << best_align << std::endl;
+    *Pose1 = best_align;
+    if (cal_cov)
+    {
+	//std::cout << "if(cal_cov == true )" << std::endl;
+	double accumulatedVarianceXX = 0;
+	double accumulatedVarianceXY = 0;
+	double accumulatedVarianceYY = 0;
+	double accumulatedVarianceThTh = 0;
+	double norm = 0;
+	Matrix3d Covariance = Matrix3d::Zero();
+	Covariance(0, 0) = 100;
+	Covariance(1, 1) = 100;
+	Covariance(2, 2) = 100;
+
+	for (int z = 0; z < size_theta; z++)
+	{
+	    for (int x = 0; x < size_x; x++)
+	    {
+		for (int y = 0; y < size_y; y++)
+		{
+		    if ((ScoreMap[z][x][y]) >= (best_score * 0.8))
+		    {
+			//std::cout << "if((ScoreMap[z][y][x]/sum_score) >= (best_score*0.8))" << std::endl;
+			double response = ScoreMap[z][x][y] / sum_score;
+			norm = norm + response;
+			Vector3d select;
+			select(0) = Pose(0) + x_search[x];
+			select(1) = Pose(1) + y_search[y];
+			select(2) = Pose(2) + thetas[z];
+			accumulatedVarianceXX = accumulatedVarianceXX + (best_align(0) - select(0)) * (best_align(0) - select(0)) * response;
+			accumulatedVarianceXY = accumulatedVarianceXY + (best_align(0) - select(0)) * (best_align(1) - select(1)) * response;
+			accumulatedVarianceYY = accumulatedVarianceYY + (best_align(1) - select(1)) * (best_align(1) - select(1)) * response;
+			accumulatedVarianceThTh = (best_align(2) - select(2)) * (best_align(2) - select(2)) * response;
+		    }
+		}
+	    }
+	}
+
+	if (norm > 0)
+	{
+	    double varianceXX = accumulatedVarianceXX / norm;
+	    double varianceXY = accumulatedVarianceXY / norm;
+	    double varianceYY = accumulatedVarianceYY / norm;
+	    double varianceThTh = accumulatedVarianceThTh / norm;
+
+	    double minVarianceXX = 0.1 * resolution_ * resolution_;
+	    double minVarianceYY = 0.1 * resolution_ * resolution_;
+	    double minVarianceThTh = (0.5 / 180 * M_PI) * (0.5 / 180 * M_PI);
+	    varianceXX = varianceXX > minVarianceXX ? varianceXX : minVarianceXX;
+	    varianceYY = varianceYY > minVarianceYY ? varianceYY : minVarianceYY;
+	    varianceThTh = varianceThTh > minVarianceThTh ? varianceThTh : minVarianceThTh;
+
+	    double multiplier = 1;
+	    Covariance(0, 0) = varianceXX * multiplier;
+	    Covariance(0, 1) = varianceXY * multiplier;
+	    Covariance(1, 0) = varianceXY * multiplier;
+	    Covariance(1, 1) = varianceYY * multiplier;
+	    Covariance(2, 2) = varianceThTh * multiplier;
+	}
+	if (Covariance(0, 0) * Covariance(0, 0) < 0.00000001)
+	    Covariance(0, 0) = 100;
+	if (Covariance(1, 1) * Covariance(1, 1) < 0.00000001)
+	    Covariance(1, 1) = 100;
+	*cov = Covariance;
+    }
+}
+}

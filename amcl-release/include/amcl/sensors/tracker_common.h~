@@ -1,0 +1,18 @@
+#include <deque>
+#include <memory>
+
+#include "Eigen/Cholesky"
+#include "Eigen/Core"
+
+namespace amcl{
+typedef Eigen::Matrix3d Pose2DCovariance;
+typedef Eigen::Matrix<double, 6, 6> PoseCovariance;
+
+
+void AddOdometerPoseObservation(amcl::Time time,
+                                const transform::Rigid3d& pose,
+                                const PoseCovariance& covariance);
+
+
+
+}

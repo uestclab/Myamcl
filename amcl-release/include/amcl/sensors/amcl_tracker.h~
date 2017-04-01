@@ -1,0 +1,102 @@
+#ifndef CARTOGRAPHER_KALMAN_FILTER_POSE_TRACKER_H_
+#define CARTOGRAPHER_KALMAN_FILTER_POSE_TRACKER_H_
+#include <deque>
+#include <memory>
+
+#include "Eigen/Cholesky"
+#include "Eigen/Core"
+#include "transform.h"
+#include "unscented_kalman_filter.h"
+#include "transform.h"
+#include "amcl_time.h"
+
+namespace amcl{
+namespace kalman_filter {
+
+typedef Eigen::Matrix3d Pose2DCovariance;
+typedef Eigen::Matrix<double, 6, 6> PoseCovariance;
+
+struct PoseAndCovariance {
+  transform::Rigid3d pose;
+  PoseCovariance covariance;
+};
+
+PoseAndCovariance operator*(const transform::Rigid3d& transform,
+                            const PoseAndCovariance& pose_and_covariance);
+
+// Projects a 3D pose covariance into a 2D pose covariance.
+Pose2DCovariance Project2D(const PoseCovariance& embedded_covariance);
+
+// Embeds a 2D pose covariance into a 3D pose covariance.
+PoseCovariance Embed3D(const Pose2DCovariance& embedded_covariance,
+                       double position_variance, double orientation_variance);
+
+class PoseTracker {
+ public:
+  enum {
+    kMapPositionX = 0,
+    kMapPositionY,
+    kMapPositionZ,
+    kMapOrientationX,
+    kMapOrientationY,
+    kMapOrientationZ,
+    kMapVelocityX,
+    kMapVelocityY,
+    kMapVelocityZ,
+    kDimension  // We terminate loops with this.
+  };
+
+  enum class ModelFunction { k2D, k3D };
+
+  using KalmanFilter = UnscentedKalmanFilter<double, kDimension>;
+  using State = KalmanFilter::StateType;
+  using StateCovariance = Eigen::Matrix<double, kDimension, kDimension>;
+  using Distribution = GaussianDistribution<double, kDimension>;
+
+  // Create a new Kalman filter starting at the origin with a standard normal
+  // distribution at 'time'.
+  PoseTracker(const ModelFunction& model_function, amcl::Time time);
+  virtual ~PoseTracker();
+
+  // Sets 'pose' and 'covariance' to the mean and covariance of the belief at
+  // 'time' which must be >= to the current time. Must not be nullptr.
+  void GetPoseEstimateMeanAndCovariance(amcl::Time time,
+                                        transform::Rigid3d* pose,
+                                        PoseCovariance* covariance);
+
+  // Updates from a pose estimate in the map frame.
+  void AddPoseObservation(amcl::Time time, const transform::Rigid3d& pose,
+                          const PoseCovariance& covariance);
+
+
+  amcl::Time time() const { return time_; }
+
+  // Returns the belief at the 'time' which must be >= to the current time.
+  Distribution GetBelief(amcl::Time time);
+
+
+ private:
+  // Returns the distribution required to initialize the KalmanFilter.
+  static Distribution KalmanFilterInit();
+
+  // Build a model noise distribution (zero mean) for the given time delta.
+  const Distribution BuildModelNoise(double delta_t) const;
+
+  // Predict the state forward in time. This is a no-op if 'time' has not moved
+  // forward.
+  void Predict(amcl::Time time);
+
+  // Computes a pose combining the given 'state' with the 'imu_tracker_'
+  // orientation.
+  transform::Rigid3d RigidFromState(const PoseTracker::State& state);
+
+  const ModelFunction model_function_;
+  amcl::Time time_;
+  KalmanFilter kalman_filter_;
+};
+
+}  // namespace kalman_filter
+}  // namespace amcl
+
+#endif  // CARTOGRAPHER_KALMAN_FILTER_POSE_TRACKER_H_
+
