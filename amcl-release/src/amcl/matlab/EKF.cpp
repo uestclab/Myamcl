@@ -29,22 +29,6 @@ EKF::EKF(Eigen::Vector3d &initPose, Eigen::Matrix3d &initCov, Eigen::MatrixXd &G
 
     rows_ = Gaussian_map.cols();
     cols_ = Gaussian_map.rows();
-    //std::cout << "rows_ = " << rows_ << "cols_ = " << cols_ << std::endl;
-    /*
-    std::vector<std::vector<std::vector<double>>> ScoreMap(3,vector<vector<double> >(4,vector<double>(5,0)));
-	
-	 for(int z=0;z<3;z++)  
-    {  
-        for (int y=0;y<4;y++)  
-        {  
-            for (int x=0;x<5;x++)  
-            {  
-                ScoreMap[z][y][x]= ScoreMap[z][y][x] + x + y + z;  
-                std::cout<<ScoreMap[z][y][z]<<std::endl;  
-            }  
-        }  
-    } 
-*/
 }
 
 EKF::~EKF()
@@ -53,9 +37,6 @@ EKF::~EKF()
 
 void EKF::run(Eigen::Vector3d &Pre_odom, Eigen::Vector3d &Cur_odom, double *laserRange, double *theta, int range_count, double maxRange)
 {
-    //std::cout << "Enter EKF::run" << std::endl;
-    //std::cout << "Cur_odom = " << Cur_odom << std::endl;
-    //std::cout << "Pre_odom = " << Pre_odom << std::endl;
     double delta_x = Cur_odom(0) - Pre_odom(0);
     double delta_y = Cur_odom(1) - Pre_odom(1);
     double rot1 = atan2(delta_y, delta_x) - Pre_odom(2);
@@ -177,23 +158,21 @@ void EKF::SearchBestAlign(Eigen::Vector3d *Pose1, double *laserRange, double *th
 
 		if (score > best_score)
 		{
-		    //std::cout << "if(score > best_score) " << std::endl;
 		    best_score = score;
 		    best_align(0) = Pose(0) + x_search[x];
 		    best_align(1) = Pose(1) + y_search[y];
 		    best_align(2) = LaserAngle;
-		    std::cout << "best_score = " << best_score << std::endl;
+		    //std::cout << "best_score = " << best_score << std::endl;
 		}
 		ScoreMap[z][x][y] = score;
 		sum_score = sum_score + ScoreMap[z][x][y];
 	    }
 	}
     }
-    std::cout << "best_align = " << best_align << std::endl;
+    //std::cout << "best_align = " << best_align << std::endl;
     *Pose1 = best_align;
     if (cal_cov)
     {
-	//std::cout << "if(cal_cov == true )" << std::endl;
 	double accumulatedVarianceXX = 0;
 	double accumulatedVarianceXY = 0;
 	double accumulatedVarianceYY = 0;
@@ -212,7 +191,6 @@ void EKF::SearchBestAlign(Eigen::Vector3d *Pose1, double *laserRange, double *th
 		{
 		    if ((ScoreMap[z][x][y]) >= (best_score * 0.8))
 		    {
-			//std::cout << "if((ScoreMap[z][y][x]/sum_score) >= (best_score*0.8))" << std::endl;
 			double response = ScoreMap[z][x][y] / sum_score;
 			norm = norm + response;
 			Vector3d select;

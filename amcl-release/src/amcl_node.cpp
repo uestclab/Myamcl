@@ -193,8 +193,10 @@ private:
   void Relocalize(tf::Pose &relocalizePose); //debug
   //void handleResetMessage();
   //void ResetDependentMemory();
-  map_t * changeMap();
-  void WriteMapInfoToYaml(uint32_t uid,int floor);
+  map_t *changeMap();
+  void WriteMapInfoToYaml(uint32_t uid,int floor,double origin_x,double origin_y);
+  void handleInitMapMessage(const nav_msgs::OccupancyGridConstPtr &msg);//new msg defined 0401
+  bool globalLocalization();
 
 //end_debug
 
@@ -838,7 +840,7 @@ void AmclNode::mapReceived(const nav_msgs::OccupancyGridConstPtr &msg)
 
   handleMapMessage(*msg);
   //0327
-  GaussianMap_ = new LoadMap(*msg);
+  //GaussianMap_ = new LoadMap(*msg);
   //0327
   first_map_received_ = true;
 }
@@ -862,6 +864,9 @@ void AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid &msg)
 
   //map_ = convertMap(msg); //debug
   map_ = changeMap(); // debug
+  //0327
+  GaussianMap_ = new LoadMap(msg);
+  //0327
 
 #if NEW_UNIFORM_SAMPLING
   // Index of free space
@@ -879,8 +884,37 @@ void AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid &msg)
   pf_->pop_err = pf_err_;
   pf_->pop_z = pf_z_;
 
+
   // Initialize the filter
   updatePoseFromServer();
+
+//debug
+
+  //write last position to yaml
+  //WriteMapInfoToYaml(1,13,35,52);
+  std::ifstream yaml_file("/home/liqing/amcl_study/amcl_ws/src/yaml_test/mapInfo.yaml");
+
+	YAML::Node doc = YAML::Load(yaml_file);
+	std::string mapfname = "";
+	double occ_th, free_th,resolution,origin_x,origin_y;
+	int uid,floor;
+	doc["uid"] >> uid;
+	doc["floor"] >> floor;
+	doc["image"] >> mapfname;
+	doc["resolution"] >> resolution;
+	doc["xorigin"] >> origin_x;
+	doc["yorigin"] >> origin_y;
+	doc["occupied_thresh"] >> occ_th;
+	doc["free_thresh"] >> free_th;
+
+
+
+  yaml_file.close();
+init_pose_[0] = 35;
+init_pose_[1] = 52;
+
+//debug
+
   pf_vector_t pf_init_pose_mean = pf_vector_zero();
   pf_init_pose_mean.v[0] = init_pose_[0];
   pf_init_pose_mean.v[1] = init_pose_[1];
@@ -946,6 +980,8 @@ void AmclNode::freeMapDependentMemory()
   //0327
   delete GaussianMap_;
   GaussianMap_ = NULL;
+  delete EKF_;
+  EKF_ = NULL;
   //0327
 }
 
@@ -977,8 +1013,6 @@ AmclNode::convertMap(const nav_msgs::OccupancyGrid &map_msg)
       map->cells[i].occ_state = +1;
     else
       map->cells[i].occ_state = 0;
-	if(i<4000)
-		std::cout << map->cells[i].occ_state << " ";
   }
 
   return map;
@@ -1031,6 +1065,7 @@ AmclNode::uniformPoseGenerator(void *arg)
   p.v[0] = MAP_WXGX(map, free_point.first);
   p.v[1] = MAP_WYGY(map, free_point.second);
   p.v[2] = drand48() * 2 * M_PI - M_PI;
+
 #else
   double min_x, max_x, min_y, max_y;
 
@@ -1040,7 +1075,7 @@ AmclNode::uniformPoseGenerator(void *arg)
   max_y = (map->size_y * map->scale) / 2.0 + map->origin_y;
 
   pf_vector_t p;
-
+  std::cout <<"uniformPoseGenerator uniformPoseGenerator" << std::endl;
   ROS_DEBUG("Generating new uniform sample");
   for (;;)
   {
@@ -1094,6 +1129,7 @@ bool AmclNode::setMapCallback(nav_msgs::SetMap::Request &req,
 
 //debug
 int laser_count = 0;
+bool initLocalization = true;
 
 Vector3d initPose;
 Vector3d Pre_odom;
@@ -1108,9 +1144,17 @@ void AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr &laser_scan)
 {
   laser_count++; //debug
 
-//end_debug
   pf_sample_set_t *set = pf_->sets + pf_->current_set;
 
+  //std::cout << "laserReceived : set->sample_count = " << set->sample_count << std::endl;
+/*
+  if(initLocalization == false)
+  {
+	globalLocalization();
+	initLocalization = true;
+  }
+*/	
+//end_debug
   last_laser_received_ts_ = ros::Time::now();
   //0329
 
@@ -1181,11 +1225,10 @@ void AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr &laser_scan)
 
 
   //debug 0329
-  if (ekf == 1)
+  if (ekf == 1 && initLocalization)
   {
 	std::cout << "if (ekf == 1) " << std::endl;
-    ros::Time time1 = ros::Time::now();
-    //std::cout << "if(ekf == 1)" << std::endl;
+    //ros::Time time1 = ros::Time::now();
     Pre_odom(0) = Cur_odom(0);
     Pre_odom(1) = Cur_odom(1);
     Pre_odom(2) = Cur_odom(2);
@@ -1198,19 +1241,20 @@ void AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr &laser_scan)
     double *laserRange = new double[range_count];
     double *theta = new double[range_count];
     double delta = laser_scan->angle_increment; //2.0*(135.0/180.0)*M_PI/(range_count-1);
+	double initTheta = (-135.0 / 180.0);
     for (int i = 0; i < range_count; i++)
     {
       laserRange[i] = laser_scan->ranges[i];
-      theta[i] = (-135.0 / 180.0) * M_PI + i * delta;
+      theta[i] = initTheta * M_PI + i * delta;
 
       //std::cout << " laserRange["<<i<<"] = " << laserRange[i]<<std::endl;
     } //for
-    //std::cout << "before EKF_->run" << std::endl;
+;
     EKF_->run(Pre_odom, Cur_odom, laserRange, theta, range_count, laser_max_range_);
 
-    //std::cout << "after EKF_->run" << std::endl;
+
     Eigen::Vector3d pose_mean = EKF_->latestPose_;
-    //std::cout << "pose_mean = " << pose_mean << std::endl;
+
     // publish
     tf::Stamped<tf::Pose> odom_to_map;
     try
@@ -1291,7 +1335,7 @@ void AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr &laser_scan)
 
     //debug
 
-    if (laser_count > 30)
+    if (laser_count > 30 && initLocalization)
     {
       if (set->sample_count < 250)
       {
@@ -1762,10 +1806,11 @@ AmclNode::changeMap()
 {
   std::cout << "AmclNode::changeMap begin  " << std::endl;
   //test yaml
-  //WriteMapInfoToYaml(1,13);
+  //WriteMapInfoToYaml(1,13,-19.47783432006836,-5.01034851074219);
+/*
   map_t *map = map_alloc();
   ROS_ASSERT(map);
-  std::ifstream yaml_file("/home/liqing/amcl_study/amcl_ws/src/yaml_test/mapInfo.yaml");
+  std::ifstream yaml_file("/home/liqing/amcl_study/amcl_ws/src/yaml_test/map.yaml");
 
 	YAML::Node doc = YAML::Load(yaml_file);
 	std::string mapfname = "";
@@ -1791,7 +1836,7 @@ AmclNode::changeMap()
 
   yaml_file.close();
   std::cout << "map->size_x = " << map->size_x << "map->size_y = " << map->size_y << "map->scale = " << map->scale << "map->origin_x = " << map->origin_x << "map->origin_y = " << map->origin_y << std::endl;
-/*
+*/
   map_t *map = map_alloc();
   ROS_ASSERT(map);
 
@@ -1802,13 +1847,13 @@ AmclNode::changeMap()
   map->scale = 0.05;
   map->origin_x = -19.47783432006836 + (map->size_x / 2) * map->scale;
   map->origin_y = -5.01034851074219 + (map->size_y / 2) * map->scale;
-*/
+
   // Convert to player format
   map->cells = (map_cell_t *)malloc(sizeof(map_cell_t) * map->size_x * map->size_y);
   ROS_ASSERT(map->cells);
   
-	//double occ_th = 0.51;
-	//double free_th = 0.49;
+	double occ_th = 0.51; //3 state (hit : <=10 , unknow : ==50 , free : >= 180)
+	double free_th = 0.49;
 	double occ = 0;
 	unsigned char* p;
 	for (size_t x = 0; x < imageOri.rows; ++x) 
@@ -1826,12 +1871,12 @@ AmclNode::changeMap()
 				map->cells[i].occ_state = 0;
 	    }
 	}
-//std::cout << "AmclNode::changeMap end  " << std::endl;
+	std::cout << "AmclNode::changeMap end  " << std::endl;
   return map;
 }
 
 //0401
-void AmclNode::WriteMapInfoToYaml(uint32_t uid,int floor)
+void AmclNode::WriteMapInfoToYaml(uint32_t uid,int floor,double origin_x,double origin_y)
 {
     std::ofstream yaml_file("/home/liqing/amcl_study/amcl_ws/src/yaml_test/mapInfo.yaml", std::ios::out | std::ios::binary);
     {
@@ -1851,6 +1896,23 @@ void AmclNode::WriteMapInfoToYaml(uint32_t uid,int floor)
 	}
     yaml_file.close();
 }
+
+
+bool AmclNode::globalLocalization()
+{
+  if (map_ == NULL)
+  {
+    return true;
+  }
+  boost::recursive_mutex::scoped_lock gl(configuration_mutex_);
+  ROS_INFO("Initializing with uniform distribution");
+  pf_init_model(pf_, (pf_init_model_fn_t)AmclNode::uniformPoseGenerator,
+                (void *)map_);
+  ROS_INFO("Global initialisation done!");
+  pf_init_ = false;
+  return true;
+}
+
 
 
 //end_debug

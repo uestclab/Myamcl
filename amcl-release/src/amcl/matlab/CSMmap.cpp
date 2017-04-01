@@ -19,11 +19,9 @@ LoadMap::LoadMap(const nav_msgs::OccupancyGrid &map_msg)
 {
     width_ = map_msg.info.width;
     height_ = map_msg.info.height;
-	std::cout << "width_ = " << width_ <<std::endl;
     res_ = map_msg.info.resolution;
     origin_x = map_msg.info.origin.position.x;
     origin_y = map_msg.info.origin.position.y;
-    std::cout << "map_msg.info.origin.position.x = " << map_msg.info.origin.position.x << "map_msg.info.origin.position.y = " << map_msg.info.origin.position.y << std::endl;
 
     hit_ = MatrixXd::Zero(height_, width_); // Col major , not row major
 
@@ -32,7 +30,7 @@ LoadMap::LoadMap(const nav_msgs::OccupancyGrid &map_msg)
 	//imageOri = imread("/home/liqing/mapLoad.png",IMREAD_GRAYSCALE);
 	//imwrite("/home/liqing/mapLoad.png",imageOri);
 
-	double occ_th = 0.51;
+	double occ_th = 0.51; //3 state (hit : <=10 , unknow : ==50 , free : >= 180)
 	double free_th = 0.49;
 	double occ = 0;
 	unsigned char* p;
