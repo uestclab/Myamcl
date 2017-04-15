@@ -8,12 +8,6 @@
 #include "nav_msgs/GetMap.h"
 #include "nav_msgs/SetMap.h"
 
-
-
-
-
-
-
 enum MapMode {TRINARY, SCALE, RAW};
 
 namespace amcl{
@@ -26,16 +20,14 @@ public:
 	LoadMap(const nav_msgs::OccupancyGrid& map_msg);
 	LoadMap();
 	virtual ~LoadMap();
-	//void SearchBestAlign(scan,)
 
-	Eigen::MatrixXd hit_;
-	Eigen::MatrixXd loadmap_;
+	Eigen::MatrixXd hit_; // image coordinate
+	Eigen::MatrixXd loadmap_; // gaussian map world coordinate
+    Eigen::MatrixXd map_; // map world coordinate 
 	double origin_x,origin_y;
 private:
 	double res_;
 	int width_, height_;
-
-
 };
 
 }

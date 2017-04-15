@@ -1,19 +1,35 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(amcl)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-add_definitions(-DCOMPILEDWITHC11)
-message(STATUS "Using flag -std=c++11.")
+#xiaoafei
+include(CheckCXXCompilerFlag)
+CHECK_CXX_COMPILER_FLAG("-std=c++11" COMPILER_SUPPORTS_CXX11)
+CHECK_CXX_COMPILER_FLAG("-std=c++0x" COMPILER_SUPPORTS_CXX0X)
+if(COMPILER_SUPPORTS_CXX11)
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+elseif(COMPILER_SUPPORTS_CXX0X)
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
+else()
+  message(STATUS "The compiler ${CMAKE_CXX_COMPILER} has no C++11 support. Please use a different C++ compiler.")
+endif()
+
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+# add_definitions(-DCOMPILEDWITHC11)
+# message(STATUS "Using flag -std=c++11.")
 
 LIST(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake_modules)
 
 find_package(catkin REQUIRED
-        COMPONENTS
+            COMPONENTS
+            std_msgs
             rosbag
             roscpp
             tf
             dynamic_reconfigure
             nav_msgs
+			pcl_conversions 
+  			pcl_ros 
+  			pcl_msgs
         )
 
 find_package(Boost REQUIRED)
@@ -26,12 +42,14 @@ generate_dynamic_reconfigure_options(
 
 catkin_package(
     CATKIN_DEPENDS
+        std_msgs
         rosbag
         roscpp
         dynamic_reconfigure
         tf
-  INCLUDE_DIRS include
-  LIBRARIES amcl_sensors amcl_map amcl_pf amcl_matlab
+
+    INCLUDE_DIRS include
+    LIBRARIES amcl_sensors amcl_map amcl_pf amcl_matlab
 )
 
 #opencv - -debug
@@ -64,14 +82,15 @@ add_library(amcl_sensors
 
 add_library(amcl_matlab
                     src/amcl/matlab/CSMmap.cpp
-					src/amcl/matlab/EKF.cpp)
+					src/amcl/matlab/EKF.cpp
+                    src/amcl/matlab/GlobalLocalization.cpp
+                    src/tools.cpp)
 
 
 target_link_libraries(amcl_sensors amcl_map amcl_pf amcl_matlab ${EIGEN3_LIBS})
 
 
-add_executable(amcl
-                       src/amcl_node.cpp)
+add_executable(amcl src/amcl_node.cpp src/tools.cpp)
 add_dependencies(amcl amcl_gencfg)
 
 target_link_libraries(amcl
@@ -80,7 +99,8 @@ target_link_libraries(amcl
     ${catkin_LIBRARIES}
     ${OpenCV_LIBS}
     # /usr/local/lib/libprofiler.so
-	yaml-cpp
+    libglog.so
+  	yaml-cpp
 )
 
 install( TARGETS

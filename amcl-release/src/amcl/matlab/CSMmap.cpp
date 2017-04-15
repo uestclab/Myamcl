@@ -4,6 +4,8 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <iostream>
 
+#include "../../tools.h"
+
 using namespace Eigen;
 using namespace cv;
 
@@ -26,7 +28,7 @@ LoadMap::LoadMap(const nav_msgs::OccupancyGrid &map_msg)
     hit_ = MatrixXd::Zero(height_, width_); // Col major , not row major
 
 	Mat imageOri;
-	imageOri = imread("/home/liqing/bagfiles/map/map.pgm",IMREAD_GRAYSCALE);
+	imageOri = imread("/home/prosper/catkin_ws/src/prosper_underpan/map/map.pgm",IMREAD_GRAYSCALE);
 	//imageOri = imread("/home/liqing/mapLoad.png",IMREAD_GRAYSCALE);
 	//imwrite("/home/liqing/mapLoad.png",imageOri);
 
@@ -100,92 +102,113 @@ LoadMap::LoadMap(const nav_msgs::OccupancyGrid &map_msg)
 		}
     }
 
-    loadmap_ = tempPositivemap.transpose();
-       Mat image(height_,width_,CV_8U,Scalar(128));
-       unsigned char* p1;
+	loadmap_ = tempPositivemap.transpose();
+	Mat image(height_,width_,CV_8U,Scalar(128));
+	unsigned char* p1;
 
-       for (size_t y = 0; y < height_; ++y) {
-         p1 = image.ptr<uchar>(y);
-         for (size_t x = 0; x < width_; ++x) {
-           const size_t i = x + (height_ - y - 1) * width_;
-           int data = positivemap(y,x)*255;
-           *(p1+x) = data;
-
-          }
-         }
-        imshow("debug",image);
-        imwrite("/home/liqing/map.png",image);
+	for (size_t y = 0; y < height_; ++y) {
+		p1 = image.ptr<uchar>(y);
+		for (size_t x = 0; x < width_; ++x) {
+			const size_t i = x + (height_ - y - 1) * width_;
+			int data = positivemap(y,x)*255;
+			*(p1+x) = data;
+		}
+	}
+	// imshow("debug",image);
+	imwrite("/tmp/map_gussian.png",image);
 }
 
+/*EKF 读取图片*/
 LoadMap::LoadMap()
-{
-	std::cout << "LoadMap::LoadMap()" << std::endl;     
-	res_ = 0.05;
-    origin_x = -19.47783432006836;
-    origin_y = -5.01034851074219;
+{   
+	//读取地图信息
+	uint32_t uid;
+	float x ,y,th;   //关机初始化值
+	string map_file,map_yaml;
 
+	string map_path = "/tmp/CarStatus.yaml";
+	ReadCarStatusFromYaml(map_path,&uid,&x,&y,&th,&map_file,&map_yaml);
 
 	Mat imageOri;
-	imageOri = imread("/home/liqing/bagfiles/map/map.pgm",IMREAD_GRAYSCALE);
+	imageOri = imread(map_file, IMREAD_GRAYSCALE);
+
+	float xorigin,yorigin,resolution;
+	ReadMapInfoTFromYaml(map_yaml,&xorigin,&yorigin,&resolution);
 
     width_ = imageOri.cols;
     height_ = imageOri.rows;
-	hit_ = MatrixXd::Zero(height_, width_); // Col major , not row major
-	
-	double occ_th = 0.51;
+    res_ = resolution;
+    origin_x = -xorigin;
+    origin_y = -yorigin;
+
+    hit_ = MatrixXd::Zero(height_, width_); // Col major , not row major
+
+	double occ_th = 0.51; 
 	double free_th = 0.49;
 	double occ = 0;
 	unsigned char* p;
-	for (size_t x = 0; x < imageOri.rows; ++x) 
-	{
-		p = imageOri.ptr<uchar>(x);
-		for (size_t y = 0; y < imageOri.cols; ++y) 
-		{
-		   	occ = (255 - *(p+y)) / 255.0 ;
-		   	if(occ > occ_th)
-				hit_(x, y) = 1;
-			else if(occ < free_th)
-				hit_(x,y) = -1;
-			else
-				hit_(x,y) = 0;
-	    }
+
+    //3 state (hit : <=10 , unknow : ==50 , free : >= 180) png
+	unsigned char pix = 0;
+	/*png 图像*/
+	if(strstr(map_file.c_str(),".png") != NULL){
+		for (size_t x = 0; x < imageOri.rows; ++x){
+			p = imageOri.ptr<uchar>(x);
+			for (size_t y = 0; y < imageOri.cols; ++y){
+				pix = *(p + y);
+				if (pix < 20)
+					hit_(x, y) = +1;
+				else if (pix > 128)
+					hit_(x, y) = -1; // free space;
+				else
+					hit_(x, y) = 0; // unknow space;
+			}
+		}
+	}else if(strstr(map_file.c_str(),".pgm") != NULL){
+		for (size_t x = 0; x < imageOri.rows; ++x) {
+			p = imageOri.ptr<uchar>(x);
+			for (size_t y = 0; y < imageOri.cols; ++y) {
+				occ = (255 - *(p+y)) / 255.0 ;
+				if(occ > occ_th)
+					hit_(x, y) = 1;
+				else if(occ < free_th)
+					hit_(x,y) = -1;
+				else
+					hit_(x,y) = 0;
+			}
+		}
 	}
-	
+
     loadmap_ = MatrixXd::Zero(width_, height_); // swap width and height
+    map_ = MatrixXd::Zero(width_, height_);
+    MatrixXd tempMap = MatrixXd::Zero(height_, width_);
     MatrixXd positivemap = MatrixXd::Zero(height_, width_);
     MatrixXd tempPositivemap = MatrixXd::Zero(height_, width_);
 
     //Gaussian filter
-    int windowSize = 3;
-    double sigma = sqrt(2) * windowSize * res_ / 3;
+    int windowSize = 10;
+    double sigma = windowSize * res_ / 3;
     MatrixXd gaussianWindow = MatrixXd::Zero(2 * windowSize + 1, 2 * windowSize + 1);
-    double max_prob = normpdf(0, 0, sigma) * 5;
-    for (int i = -windowSize; i < windowSize + 1; i++)
-    {
-		for (int j = -windowSize; j < windowSize + 1; j++)
-		{
+    double max_prob = normpdf(0, 0, sigma);
+    for (int i = -windowSize; i < windowSize + 1; i++){
+		for (int j = -windowSize; j < windowSize + 1; j++){
 			double dist = res_ * sqrt(i * i + j * j);
 			gaussianWindow(i + windowSize, j + windowSize) = normpdf(dist, 0, sigma) / max_prob;
 		}
     }
 
-
-    for (int y = 0; y < height_; y++)
-    {
-		for (int x = 0; x < width_; x++)
-		{
-			if (hit_(y, x) == 1)
-			{
-				for (int i = -windowSize; i < windowSize + 1; i++)
-				{
-					for (int j = -windowSize; j < windowSize + 1; j++)
-					{
+    for (int y = 0; y < height_; y++){
+		for (int x = 0; x < width_; x++){
+			if (hit_(y, x) == 1){
+				for (int i = -windowSize; i < windowSize + 1; i++){
+					for (int j = -windowSize; j < windowSize + 1; j++){
 						bool inmap = (y + i > -1) && (y + i < height_) && (x + j > -1) && (x + j < width_);
-						if (inmap)
-						{
+						if (inmap){
 							double p = positivemap(y + i, x + j);
 							double q = gaussianWindow(i + windowSize, j + windowSize);
-							positivemap(y + i, x + j) = (p + q) > 1 ? 1 : (p + q); //positivemap is same as Hmap.lookup original
+							//positivemap(y + i, x + j) = (p + q) > 1 ? 1 : (p + q); //positivemap is same as Hmap.lookup original
+							if(p<q)
+								positivemap(y + i, x + j) = q;
 						}
 					}
 				}
@@ -199,29 +222,29 @@ LoadMap::LoadMap()
 		{
 			double data = positivemap(y, x);
 			tempPositivemap(height_ - y - 1, x) = data;
+            tempMap(height_ - y - 1, x) = hit_(y,x);
 		}
     }
+    map_ = tempMap.transpose();
 
-    loadmap_ = tempPositivemap.transpose();
-       Mat image(height_,width_,CV_8U,Scalar(128));
-       unsigned char* p1;
+	loadmap_ = tempPositivemap.transpose();
+	Mat image(height_,width_,CV_8U,Scalar(128));
+	unsigned char* p1;
 
-       for (size_t y = 0; y < height_; ++y) {
-         p1 = image.ptr<uchar>(y);
-         for (size_t x = 0; x < width_; ++x) {
-           const size_t i = x + (height_ - y - 1) * width_;
-           int data = positivemap(y,x)*255;
-           *(p1+x) = data;
-
-          }
-         }
-        //imshow("debug",image);
-        imwrite("/home/liqing/map_331.png",image);
+	for (size_t y = 0; y < height_; ++y) {
+		p1 = image.ptr<uchar>(y);
+		for (size_t x = 0; x < width_; ++x) {
+			const size_t i = x + (height_ - y - 1) * width_;
+			int data = positivemap(y,x)*255;
+			*(p1+x) = data;
+		}
+	}
+	// imshow("debug",image);
+	// imwrite("/home/liqing/amcl_study/amcl_ws/src/yaml_test/map_gussian.png",image);
+	imwrite("/tmp/map_gussian.png",image);
 }
 
-
-
-LoadMap::~LoadMap()
-{
+LoadMap::~LoadMap(){
 }
+
 }
